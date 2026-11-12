@@ -1,0 +1,47 @@
+{
+ "tris": 3912,
+ "tri_ok": true,
+ "watertight": true,
+ "degenerate_faces": 0,
+ "materials": 1,
+ "uv_layers": 1,
+ "size_studs": [
+  2.002,
+  1.813,
+  1.314
+ ],
+ "rel_min": [
+  -1.029,
+  -0.898,
+  -0.989
+ ],
+ "rel_max": [
+  0.973,
+  0.914,
+  0.325
+ ],
+ "bounds_ok": true,
+ "type": "Neck",
+ "attachment": "Neck",
+ "fit_center": [
+  -0.028,
+  0.0079,
+  1.668
+ ],
+ "offset_from_attachment": [
+  -0.028,
+  0.0079,
+  -0.332
+ ],
+ "rig": "R6",
+ "accessory_type": "Neck",
+ "roblox_attachment": "NeckAttachment",
+ "handle_attachment_position": [
+  -0.028,
+  0.332,
+  -0.0079
+ ],
+ "display_name": "Ashen Mourning Ruff",
+ "body_inside": {},
+ "min_clearance": 0.0147
+}
