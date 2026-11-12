@@ -1,0 +1,47 @@
+{
+ "tris": 3900,
+ "tri_ok": true,
+ "watertight": true,
+ "degenerate_faces": 0,
+ "materials": 1,
+ "uv_layers": 1,
+ "size_studs": [
+  0.704,
+  0.739,
+  0.963
+ ],
+ "rel_min": [
+  -0.558,
+  -0.44,
+  -0.082
+ ],
+ "rel_max": [
+  0.146,
+  0.298,
+  0.881
+ ],
+ "bounds_ok": true,
+ "type": "Hat",
+ "attachment": "Hat",
+ "fit_center": [
+  -0.2062,
+  -0.0709,
+  3.4998
+ ],
+ "offset_from_attachment": [
+  -0.2062,
+  -0.0709,
+  0.3998
+ ],
+ "rig": "R6",
+ "accessory_type": "Hat",
+ "roblox_attachment": "HatAttachment",
+ "handle_attachment_position": [
+  -0.2062,
+  -0.3998,
+  0.0709
+ ],
+ "display_name": "Ashen Candlewax Top Hat",
+ "body_inside": {},
+ "min_clearance": 0.0165
+}
