@@ -1,0 +1,412 @@
+"""Ashen Mourning Ruff: Neck accessory (NeckAttachment), fitted to the R6 avatar.
+
+An Elizabethan millstone ruff reworked as visual-kei mourning wear: black chiffon set in deep
+figure-eight pleats with an oxblood binding, around a taller box-pleated frill of ivory lace. The left
+shoulder is torn (shorter, frayed pleats, one hanging loose over the chest). Three black glass shards
+in a tarnished silver bezel with pearl studs close it at the throat, and two uneven strands of pearls
+and jet beads fall from the bezel onto the chest, each ending in a drop. One closed mesh, < 4k triangles.
+"""
+import math
+import os
+import sys
+
+import bpy  # noqa: F401  (must precede mathutils)
+import numpy as np
+from scipy.spatial import ConvexHull
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import rbxkit as K  # noqa: E402
+
+NAME = 'AshenMourningRuff'
+np.random.seed(37)                 # Asm draws per-part shading noise from the global generator
+rng = np.random.default_rng(37)
+X, Y, Z = np.eye(3)
+TOP, CLR = 2.0, 0.014              # torso top, clearance kept above it
+THK = 0.012                        # chiffon / lace thickness
+CH = K.CHUNK                       # UV island length: periodic prints repeat a whole number of times per island
+
+# black ruff: a strip whose outer edge traces x = t - BETA sin 2t, z = AMP sin t (upper and lower tubes)
+NP, SPP = 15, 17                   # pleat periods (30 tubes), samples per period
+BETA, AMP = 1.15, 0.09             # S-curve overhang, pleat half height
+RX, RY, RIN = 1.02, 0.90, 0.71     # outer half-extents, inner radius
+GAPA = math.radians(9.5)           # half-opening at the throat, closed by the clasp
+ZC = TOP + CLR + AMP + THK / 2     # mid height where it rests on the shoulders
+DROOP, DY0 = 0.09, 0.46            # sag beyond the torso's front and back faces
+TEAR = (math.radians(34), math.radians(118))   # torn sector on the left shoulder
+LOOSE = math.radians(47)           # where the torn pleat hangs loose
+# ivory lace frill: box pleats leaning out from the neck
+NF, FZ0, FZ1 = 22, 2.03, 2.335
+VIEWS = [('preview', (0.1, -0.3, 2.0), (0.55, -1.0, 0.42), 4.4, 60),
+         ('front', (0.0, -0.2, 1.85), (0.0, -1.0, 0.1), 4.8, 60),
+         ('back', (0.0, 0.2, 2.05), (-0.5, 1.0, 0.5), 4.4, 60),
+         ('closeup', (0.22, -0.62, 1.95), (0.35, -1.0, 0.3), 2.2, 60)]
+
+
+# ------------------------------------------------------------------------------------ materials
+def _chiffon(nb):
+    """Black crepe chiffon: crinkle streaks along the folds, soft sheen, sheer lighter zone inside an
+    oxblood satin binding with stitches (v = studs from the bound edge), frayed where torn (vfac)."""
+    co = nb.coord('Object')
+    u, v, _ = nb.xyz(nb.uvmap())
+    rnd = nb.attr('part_rnd')
+    fray = nb.attr('vfac')
+    tau = 2 * math.pi / CH
+    warp = nb.noise(co, 7.0, 3, 0.5)
+    crk = nb.add(nb.mul(nb.math('SINE', nb.add(nb.mul(u, tau * 23), nb.mul(warp, 9.0))), 0.6),
+                 nb.mul(nb.math('SINE', nb.add(nb.mul(u, tau * 57), nb.mul(warp, 15.0))), 0.4))
+    crk = nb.mapr(crk, -0.9, 0.9)
+    sheen = nb.noise(co, 3.5, 3, 0.55)
+    grain = nb.noise(co, 160.0, 2, 0.5)
+    open_ = nb.mapr(nb.ao(0.06), 0.3, 0.95)
+    wear = nb.mul(K.edge_mask(nb, 0.004, 0.04, 0.3), open_)
+    sheer = nb.mapr(v, 0.13, 0.035, smooth=True)
+    keep = nb.inv(nb.mapr(fray, 0.15, 0.5))
+    bind = nb.mul(nb.mapr(v, 0.031, 0.026), keep)
+    dash = nb.mapr(nb.absf(nb.sub(nb.frac(nb.mul(u, 40 / CH)), 0.5)), 0.3, 0.18)
+    stitch = nb.mul(nb.mul(dash, nb.mapr(nb.absf(nb.sub(v, 0.037)), 0.0032, 0.0018)), keep)
+    threads = nb.mapr(nb.math('SINE', nb.add(nb.mul(u, tau * 71), nb.mul(warp, 23.0))), 0.1, 0.9)
+    frayed = nb.mul(nb.mul(nb.mapr(fray, 0.2, 0.7), nb.mapr(v, 0.08, 0.0)), threads)
+    c = nb.mixc(nb.mapr(nb.add(sheen, nb.mul(rnd, 0.3)), 0.35, 0.85), (0.0065, 0.006, 0.0075), (0.018, 0.016, 0.02))
+    c = nb.mixc(nb.mul(crk, 0.35), c, (0.028, 0.025, 0.031))
+    c = nb.mixc(nb.mul(sheer, 0.6), c, (0.042, 0.035, 0.045))
+    c = nb.mixc(nb.mul(wear, 0.5), c, (0.05, 0.046, 0.05))
+    bc = nb.mixc(nb.mapr(nb.add(sheen, nb.mul(crk, 0.2)), 0.3, 0.85), (0.07, 0.006, 0.01), (0.16, 0.017, 0.022))
+    c = nb.mixc(bind, c, bc)
+    c = nb.mixc(nb.mul(stitch, 0.9), c, (0.19, 0.03, 0.03))
+    c = nb.mixc(nb.mul(frayed, 0.8), c, (0.065, 0.056, 0.05))
+    c = nb.mixc(nb.mul(nb.inv(open_), 0.85), c, (0.0015, 0.0015, 0.002))
+    rough = nb.add(nb.sub(nb.mapr(sheen, 0.3, 0.7, 0.55, 0.75), nb.mul(bind, 0.25)), nb.mul(frayed, 0.15))
+    h = nb.add(nb.add(nb.mul(crk, 0.35), nb.mul(grain, 0.25)), nb.add(nb.mul(bind, 0.5), nb.mul(stitch, 0.4)))
+    return nb.finish(c, rough, 0.0, nb.bump(nb.add(h, nb.mul(frayed, 0.3)), 0.3, 0.002))
+
+
+def _lace(nb):
+    """Aged ivory lace: scalloped cut edge with a corded outline, an eyelet row, then staggered thread
+    rings over a fine net (perforations show black); v = studs down from the top edge."""
+    co = nb.coord('Object')
+    u, v, _ = nb.xyz(nb.uvmap())
+    rnd = nb.attr('part_rnd')
+
+    def cell(x, pitch, off=0.0):
+        return nb.mul(nb.sub(nb.frac(nb.add(nb.mul(x, 1 / pitch), off)), 0.5), pitch)
+
+    def dist(a, b):
+        return nb.math('SQRT', nb.add(nb.mul(a, a), nb.mul(b, b)))
+
+    PS = CH / 14
+    su = cell(u, PS)
+    bump = nb.math('SQRT', nb.maxf(nb.sub(1.0, nb.mul(nb.mul(su, su), 4 / PS ** 2)), 0.0))
+    edge = nb.sub(0.026, nb.mul(bump, 0.018))
+    cut = nb.mapr(nb.sub(edge, v), -0.0015, 0.0015)
+    cord = nb.mapr(nb.absf(nb.sub(v, nb.add(edge, 0.0045))), 0.003, 0.0016)
+    eyelet = nb.mapr(dist(su, nb.sub(v, 0.044)), 0.0068, 0.0048)
+    body = nb.mul(nb.mapr(v, 0.058, 0.066), nb.mapr(v, 0.27, 0.25))
+    PU, PV = CH / 9, 0.052
+    d1 = dist(cell(u, PU), cell(nb.sub(v, 0.07), PV))
+    d2 = dist(cell(u, PU, 0.5), cell(nb.sub(v, 0.07), PV, 0.5))
+    ring = nb.maxf(nb.mapr(nb.absf(nb.sub(d1, 0.017)), 0.0034, 0.0018), nb.mapr(nb.absf(nb.sub(d2, 0.011)), 0.003, 0.0016))
+    core = nb.maxf(nb.mapr(d1, 0.0062, 0.0045), nb.mapr(d2, 0.0035, 0.0022))
+    PN = CH / 40
+    net = nb.mapr(dist(cell(u, PN), cell(v, PN)), 0.0046, 0.0032)
+    solid_motif = nb.maxf(ring, nb.mapr(nb.minf(d1, d2), 0.024, 0.021))
+    holes = nb.maxf(nb.maxf(cut, eyelet), nb.mul(body, nb.maxf(core, nb.mul(net, nb.inv(solid_motif)))))
+    n1 = nb.noise(co, 30.0, 4, 0.6)
+    open_ = nb.mapr(nb.ao(0.05), 0.3, 0.95)
+    c = nb.mixc(nb.mapr(nb.add(n1, nb.mul(rnd, 0.3)), 0.3, 0.8), (0.47, 0.4, 0.29), (0.62, 0.56, 0.43))
+    c = nb.mixc(nb.mul(nb.maxf(cord, ring), 0.6), c, (0.74, 0.68, 0.55))
+    c = nb.mixc(nb.mul(nb.mapr(v, 0.2, 0.3), 0.55), c, (0.3, 0.24, 0.16))
+    c = nb.mixc(nb.mul(nb.inv(open_), 0.75), c, (0.07, 0.055, 0.04))
+    c = nb.mixc(nb.mul(holes, 0.95), c, (0.012, 0.01, 0.011))
+    h = nb.sub(nb.add(nb.mul(nb.maxf(cord, ring), 0.5), nb.mul(n1, 0.2)), nb.mul(holes, 0.7))
+    return nb.finish(c, nb.add(nb.mapr(n1, 0.3, 0.7, 0.6, 0.8), nb.mul(holes, 0.15)), 0.0, nb.bump(h, 0.35, 0.002))
+
+
+def _pearl(nb):
+    co = nb.coord('Object')
+    rnd = nb.attr('part_rnd')
+    n1 = nb.noise(co, 90.0, 3, 0.5)
+    ov = nb.noise(co, 22.0, 2, 0.5)
+    c = nb.mixc(rnd, (0.66, 0.6, 0.49), (0.6, 0.585, 0.56))
+    c = nb.mixc(nb.mul(nb.mapr(ov, 0.5, 0.72), 0.4), c, (0.66, 0.5, 0.52))
+    c = nb.mixc(nb.mul(nb.mapr(ov, 0.45, 0.25), 0.3), c, (0.5, 0.6, 0.55))
+    c = nb.mixc(nb.mul(nb.mapr(n1, 0.66, 0.8), 0.45), c, (0.3, 0.26, 0.2))
+    c = nb.mixc(nb.mul(nb.inv(nb.mapr(nb.ao(0.02), 0.35, 0.95)), 0.7), c, (0.08, 0.07, 0.06))
+    return nb.finish(c, nb.mapr(n1, 0.3, 0.7, 0.16, 0.3), 0.0, nb.bump(n1, 0.1, 0.001))
+
+
+def _jet(nb):
+    co = nb.coord('Object')
+    n1 = nb.noise(co, 50.0, 3, 0.5)
+    c = nb.mixc(nb.mapr(n1, 0.35, 0.7), (0.004, 0.004, 0.005), (0.013, 0.012, 0.014))
+    c = nb.mixc(nb.mul(K.edge_mask(nb, 0.002, 0.05, 0.3), 0.6), c, (0.07, 0.068, 0.072))
+    return nb.finish(c, nb.mapr(n1, 0.3, 0.7, 0.07, 0.16), 0.0, nb.bump(n1, 0.1, 0.001))
+
+
+def _glass(nb):
+    """Black glass shards: smoky oxblood depth, hairline fractures, chipped grey edges."""
+    co = nb.coord('Object')
+    smoke = nb.noise(co, 14.0, 4, 0.6, distortion=0.8)
+    lines = nb.mul(nb.mapr(nb.voronoi(co, 40.0, 'DISTANCE_TO_EDGE', 'Distance'), 0.02, 0.0),
+                   nb.mapr(nb.noise(co, 9.0, 2, 0.5), 0.45, 0.6))
+    edge = K.edge_mask(nb, 0.002, 0.05, 0.3)
+    c = nb.mixc(nb.mapr(smoke, 0.35, 0.75), (0.004, 0.003, 0.0035), (0.034, 0.006, 0.01))
+    c = nb.mixc(nb.mul(lines, 0.7), c, (0.075, 0.07, 0.075))
+    c = nb.mixc(nb.mul(edge, 0.7), c, (0.14, 0.135, 0.14))
+    rough = nb.add(nb.mapr(smoke, 0.3, 0.7, 0.03, 0.1), nb.mul(nb.add(lines, edge), 0.3))
+    return nb.finish(c, rough, 0.0, nb.bump(nb.mul(lines, -1.0), 0.2, 0.001))
+
+
+def _thread(nb):
+    co = nb.coord('Object')
+    tw = nb.noise(co, 300.0, 2, 0.5)
+    c = nb.mixc(nb.mapr(tw, 0.3, 0.7), (0.006, 0.005, 0.006), (0.03, 0.026, 0.028))
+    return nb.finish(c, 0.55, 0.0, nb.bump(tw, 0.2, 0.001))
+
+
+K.RECIPES.update({'chiffon': _chiffon, 'lace': _lace, 'pearl': _pearl, 'jet': _jet, 'glass': _glass,
+                  'thread': _thread})
+
+
+# -------------------------------------------------------------------------------------- helpers
+def at(r, th, z):
+    """(radius, angle from the front towards +X, height) -> xyz; broadcasts."""
+    r, th, z = np.broadcast_arrays(np.asarray(r, float), np.asarray(th, float), np.asarray(z, float))
+    return np.stack([r * np.sin(th), -r * np.cos(th), z], -1)
+
+
+def smooth(e0, e1, x):
+    t = np.clip((np.asarray(x, float) - e0) / (e1 - e0), 0.0, 1.0)
+    return t * t * (3 - 2 * t)
+
+
+def sag(y):
+    s = np.clip((np.abs(y) - DY0) / (RY - DY0), 0.0, 1.0)
+    return DROOP * s * s
+
+
+def droop(P):
+    """The starched ruff sags where nothing holds it up: beyond the torso's front and back faces."""
+    P = np.array(P, float)
+    P[..., 2] -= sag(P[..., 1])
+    return P
+
+
+def sheet(P, U, V, loop=None, vfac=None):
+    """Closed shell of the quad grid P[i, j] (i along, j across; closed in i when `loop` gives its U
+    length), THK thick along its normal. Faces are UV'd by U[i] and V[i, j] (studs), cut into islands
+    every CH of U."""
+    n, m = P.shape[:2]
+    ti = np.roll(P, -1, 0) - np.roll(P, 1, 0) if loop else np.gradient(P, axis=0)
+    N = K._unit(np.cross(ti, np.gradient(P, axis=1)))
+    tris = []
+    for i in range(n if loop else n - 1):
+        for j in range(m - 1):
+            a, b = i * m + j, (i + 1) % n * m + j
+            tris += [[a, b, b + 1], [a, b + 1, a + 1]]
+    uv = np.stack([np.repeat(np.asarray(U, float)[:, None], m, 1), V], -1).reshape(-1, 2)
+    v, f, uvs = K.solid_from_surface((P + N * THK / 2).reshape(-1, 3), tris, (P - N * THK / 2).reshape(-1, 3),
+                                     uv, CH)
+    for k in range(2 * len(tris)):
+        sgn = 1.0 if k < len(tris) else -1.0
+        us = np.array([p[0] for p in uvs[k]])
+        if loop and us.max() - us.min() > loop / 2:
+            us = np.where(sgn * us < loop / 2, us + sgn * loop, us)
+        us -= math.floor(us.mean() / CH) * CH
+        uvs[k] = [(float(a), b) for a, (_, b) in zip(us, uvs[k])]
+    return (v, f, uvs), (None if vfac is None else np.r_[np.ravel(vfac), np.ravel(vfac)])
+
+
+def rows_uv(P):
+    """U: mean arc length along the rows; V: distance from the last row (the bound / top edge)."""
+    U = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=-1).mean(1))]
+    V = np.linalg.norm(P - P[:, -1:], axis=-1)
+    return U, V
+
+
+# ------------------------------------------------------------------------------------- geometry
+K.use_rig('R6')
+K.ensure_mannequin()
+K.new_scene()
+head = K.mannequin_verts('Head')
+h_lo = K.polar_profile(head, 1.98, 2.15)
+h_hi = K.polar_profile(head, 2.15, 2.45)
+A = K.Asm()
+
+
+def xs(t):
+    return t - BETA * np.sin(2 * t)
+
+
+def ruff():
+    """Black chiffon strip from the throat round the neck and back: figure-eight pleats, straight from the
+    neck to the bound outer edge, torn short and frayed on the left shoulder. Returns the torn edge radius
+    of the lobe that hangs loose."""
+    t0 = 0.5 * math.acos(1 / (2 * BETA))            # minima of x(t): the strip ends at the extremes of its sweep
+    t1 = 2 * math.pi * NP - t0
+    k = (2 * math.pi - 2 * GAPA) / (xs(t1) - xs(t0))
+    tt = np.linspace(t0, t1, 40001)
+    px, pz = xs(tt) * k * RX, AMP * np.sin(tt)
+    dx, dz = np.gradient(px), np.gradient(pz)
+    w = np.hypot(dx, dz) + 0.03 * np.abs(np.gradient(np.unwrap(np.arctan2(dz, dx))))   # length + bending
+    s = np.cumsum(w) - w[0]
+    n = int(round((t1 - t0) / (2 * math.pi) * SPP)) + 1
+    t = np.interp(np.linspace(0, s[-1], n), s, tt)
+    th = GAPA + (xs(t) - xs(t0)) * k
+    amp = AMP * (1 + 0.07 * np.sin(0.41 * t + 1.3) + 0.05 * np.sin(0.93 * t + 0.4))
+    rout = (1 + 0.012 * np.sin(0.5 * t + 2.0)) / np.sqrt((np.sin(th) / RX) ** 2 + (np.cos(th) / RY) ** 2)
+    lobe = np.floor((t - t0) / math.pi).astype(int)
+    lobe_th = np.array([th[lobe == i].mean() for i in range(lobe.max() + 1)])
+    env = smooth(TEAR[0], TEAR[0] + 0.25, th) * smooth(TEAR[1], TEAR[1] - 0.3, th)
+    depth = rng.uniform(0.05, 0.15, len(lobe_th))
+    loose = int(np.argmin(np.abs(lobe_th - LOOSE)))
+    depth[loose] = 0.15
+    jag = rng.uniform(-0.022, 0.022, n) + 0.016 * (-1.0) ** np.arange(n)
+    tear = env * np.maximum(depth[lobe] + jag, 0.0)
+    P = droop(np.stack([at(RIN, th, ZC + 0.85 * amp * np.sin(t)), at(rout - tear, th, ZC + amp * np.sin(t))], 1))
+    U, V = rows_uv(P)
+    prim, vf = sheet(P, U, V, vfac=np.stack([np.zeros(n), np.clip(env * 1.5, 0, 1)], 1))
+    A.part('ruff', prim, 'chiffon', smooth=70, vfac=vf)
+    sel = lobe == loose
+    return float((rout - tear)[sel].min()), float(lobe_th[loose])
+
+
+def frill():
+    """Ivory lace standing inside the ruff: box pleats opening towards the scalloped top edge."""
+    n = NF * 4
+    th = (np.repeat(np.arange(NF), 4) + np.tile([0.0, 0.36, 0.5, 0.86], NF) - 0.18) * 2 * math.pi / NF
+    side = np.tile([1.0, 1.0, -1.0, -1.0], NF)
+    jit = rng.uniform(-1, 1, n)
+    rb = h_lo(th) + 0.048 + 0.012 * side
+    rt = h_hi(th) + 0.068 + 0.03 * side + 0.004 * jit
+    zt = FZ1 + np.where(side > 0, 0.012, -0.004) + 0.005 * jit
+    P = droop(np.stack([at(rb, th, FZ0), at(rt, th, zt)], 1))
+    seg = np.linalg.norm(np.roll(P, -1, 0) - P, axis=-1).mean(1)
+    loop = round(seg.sum() / CH) * CH
+    U = np.r_[0.0, np.cumsum(seg[:-1])] * loop / seg.sum()    # whole islands round the loop: the print meets
+    V = np.linalg.norm(P - P[:, -1:], axis=-1)
+    prim, _ = sheet(P, U, V, loop=loop)
+    A.part('frill', prim, 'lace', smooth=40)
+    return rb, rt
+
+
+def loose_pleat(r_edge, th_l):
+    """The torn end of a pleat hanging from under the torn edge over the left chest: a twisting strip,
+    bound edge outward, torn edge and tip frayed."""
+    x0 = r_edge * math.sin(th_l)
+    y0 = min(-r_edge * math.cos(th_l), -0.552)
+    z0 = ZC - 0.6 * AMP - sag(y0)
+    ctrl = np.array([(x0 - 0.02, y0 + 0.01, z0 + 0.02), (x0, y0 - 0.006, z0 - 0.045), (x0 + 0.03, y0 - 0.018, z0 - 0.13),
+                     (x0 + 0.008, y0 - 0.012, z0 - 0.21), (x0 + 0.035, y0 - 0.02, z0 - 0.28),
+                     (x0 + 0.065, y0 - 0.028, z0 - 0.34)])
+    c = K.spline(ctrl, 3)
+    T = K._unit(np.gradient(c, axis=0))
+    s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(c, axis=0), axis=1))]
+    f = s / s[-1]
+    phi = 0.35 * np.sin(f * 5.0 + 0.4)
+    W = K._unit(np.outer(np.cos(phi), X) - np.outer(np.sin(phi), Y))
+    W = K._unit(W - T * np.sum(W * T, 1, keepdims=True))
+    b = 0.105 - 0.035 * f
+    tip = smooth(1.0, 0.8, f)
+    P = np.stack([c - W * (b / 2 * (0.15 + 0.85 * tip))[:, None], c + W * (b / 2 * (0.35 + 0.65 * tip))[:, None]], 1)
+    U, V = rows_uv(P)
+    prim, vf = sheet(P, U, V, vfac=np.stack([np.ones(len(c)), 1 - tip], 1))
+    A.part('loose', prim, 'chiffon', smooth=70, vfac=vf)
+
+
+def shard(M, base, ang, length, width, height):
+    """Convex faceted glass shard in the bezel plane (local XY of M), pointing along `ang`."""
+    d = np.array([math.cos(ang), math.sin(ang)])
+    sd = np.array([-d[1], d[0]])
+    pts = [(*(base + d * length * f + sd * side * width / 2 * w * rng.uniform(0.75, 1.15)), 0.0)
+           for f, w in ((-0.12, 0.55), (0.18, 1.0), (0.55, 0.7), (0.97, 0.12)) for side in (-1, 1)]
+    for f, hh, o in ((0.12, 1.0, 0.18), (0.5, 0.7, -0.12), (0.85, 0.25, 0.05)):
+        pts.append((*(base + d * length * f + sd * width * o), height * hh))
+    pts = np.array(pts)
+    hull = ConvexHull(pts)
+    used = np.unique(hull.simplices)
+    remap = np.full(len(pts), -1)
+    remap[used] = np.arange(len(used))
+    A.part('clasp', (K.placed((pts[used], []), M), [list(remap[s]) for s in hull.simplices]), 'glass', smooth=15)
+
+
+BEZEL = [(-0.096, 0.014), (-0.07, 0.066), (-0.01, 0.082), (0.058, 0.07), (0.098, 0.02), (0.08, -0.048),
+         (0.02, -0.074), (-0.06, -0.058)]
+
+
+def clasp():
+    """Three black glass shards in a tarnished silver bezel closing the ruff at the throat, pearl studs on
+    the rim and two loops under it for the strands. Returns the loop bottoms and the hanging direction."""
+    o = np.array([0.0, -0.712, ZC - sag(0.72)])
+    nrm = K._unit((0.0, -1.0, 0.15))
+    up = np.cross(nrm, X)
+    M = K.axes(o, X, up)
+    out = K.fillet(BEZEL, 0.014, 2)
+    A.part('clasp', K.prism(out, 0.016), 'silver', M @ K.mat_trs((0, 0, 0.008)), smooth=35)
+    rim = [(x, y, 0.017) for x, y in out]
+    A.part('clasp', K.tube(rim, 0.0075, sides=4, closed=True, up=(0, 0, 1)), 'silver', M, smooth=60)
+    for ang, ln, wd, ht in ((1.0, 0.15, 0.05, 0.05), (3.55, 0.105, 0.045, 0.042), (-1.25, 0.08, 0.034, 0.032)):
+        shard(M, np.array([0.004, 0.0]), ang, ln, wd, ht)
+    for i in (1, 4, 7, 12, 14):
+        p = np.array(rim[i]) * (1.0, 1.0, 1.0) + (0, 0, 0.012)
+        A.part('clasp', K.sphere(0.0105, 5, 3), 'pearl', M @ K.mat_trs(p), smooth=180)
+    for (x, y), a in (((-0.052, 0.036), 0.25), ((0.054, -0.012), -0.3), ((-0.025, -0.045), 3.0)):
+        q = np.array([x, y, 0.018])
+        A.part('clasp', K.tube([q, q * (0.55, 0.55, 1.0) + (0, 0, 0.02)], [0.004, 0.0], sides=3,
+                               caps=('flat', 'point')), 'silver', M)
+    tops = []
+    for x in (0.03, -0.03):
+        b = K.xf(M, (x, -0.074, 0.006))
+        cr = b - up * 0.006
+        A.part('clasp', K.ring(0.012, 0.012, 0.0032, segs=6, sides=3), 'silver', K.frame(cr, -up, X))
+        tops.append(cr - up * 0.012)
+    return tops, -up
+
+
+def bead(group, p, t, kind, r):
+    if kind == 'pearl':
+        A.part(group, K.sphere(r, 6, 3), 'pearl', K.mat_trs(p, (tuple(t), (0, -1, 0)), (1.0, 1.0, 0.92)), smooth=180)
+    else:
+        A.part(group, K.lathe([(0, r * 1.05), (r, 0.0), (0, -r * 1.05)], segs=6), 'jet',
+               K.mat_trs(p, (tuple(t), (0, -1, 0))), smooth=30)
+
+
+def strand(top, ctrl, drop):
+    """Pearls and jet beads, unevenly spaced on a black thread hanging from a clasp loop; ends in a drop."""
+    pts = K.spline(np.vstack([top, ctrl]), 4)
+    path = K.Path(pts)
+    A.part('strands', K.tube(pts, 0.0032, sides=3), 'thread', smooth=60)
+    d = 0.022
+    while True:
+        kind = 'pearl' if rng.random() < 0.6 else 'jet'
+        r = rng.uniform(0.019, 0.025) if kind == 'pearl' else rng.uniform(0.014, 0.018)
+        if d + 2 * r > path.L - 0.012:
+            break
+        bead('strands', path.at(d + r), path.tan(d + r), kind, r)
+        d += 2 * r + rng.choice([0.002, 0.006, 0.016, 0.03], p=[0.35, 0.3, 0.2, 0.15])
+    end, tn = pts[-1], K._unit(pts[-1] - pts[-2])
+    m = K.mat_trs(end, (tuple(-tn), (0, -1, 0)))
+    A.part('strands', K.lathe([(0, 0.004), (0.007, 0.0), (0.006, -0.008), (0, -0.01)], segs=6), 'silver', m, smooth=50)
+    if drop == 'pearl':
+        prof = [(0, -0.006), (0.009, -0.014), (0.016, -0.03), (0.019, -0.048), (0.014, -0.064), (0, -0.07)]
+        A.part('strands', K.lathe(prof, segs=7), 'pearl', m, smooth=180)
+    else:
+        prof = [(0, -0.006), (0.015, -0.032), (0.011, -0.062), (0, -0.1)]
+        A.part('strands', K.lathe(prof, segs=6), 'jet', m, smooth=25)
+
+
+r_edge, th_l = ruff()
+rb, rt = frill()
+loose_pleat(r_edge, th_l)
+(top_a, top_b), down = clasp()
+strand(top_a, [(0.036, -0.69, 1.94), (0.045, -0.6, 1.86), (0.055, -0.545, 1.76), (0.07, -0.537, 1.62),
+               (0.08, -0.537, 1.52)], 'pearl')
+strand(top_b, [(-0.036, -0.69, 1.94), (-0.05, -0.6, 1.86), (-0.09, -0.545, 1.74), (-0.17, -0.537, 1.56),
+               (-0.235, -0.537, 1.38), (-0.25, -0.537, 1.22), (-0.2, -0.537, 1.1)], 'jet')
+print(f'frill r bottom {rb.min():.3f}..{rb.max():.3f} top {rt.min():.3f}..{rt.max():.3f}; loose lobe r {r_edge:.3f} '
+      f'at {math.degrees(th_l):.1f} deg')
+
+LV = os.environ.get('LOOK_VIEWS')
+body = K.dev_modes(A, NAME, [v for v in VIEWS if v[0] in LV.split(',')] if LV else VIEWS)
+ob, rep = K.finish_item(A, NAME, 'Neck', 'Neck', 'Ashen Mourning Ruff', meta=body)
+K.previews(NAME, VIEWS, spp=int(os.environ.get('PREVIEW_SPP', 40)))
+print('DONE', NAME)
